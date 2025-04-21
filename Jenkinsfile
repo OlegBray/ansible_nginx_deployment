@@ -8,6 +8,21 @@ pipeline {
     }
 
     stages {
+        stage('Install Git if Needed') {
+            steps {
+                script {
+                    sh '''
+                        if ! command -v git > /dev/null 2>&1; then
+                            echo "📦 Git not found. Installing..."
+                            apt-get update && apt-get install -y git
+                        else
+                            echo "✅ Git already installed."
+                        fi
+                    '''
+                }
+            }
+        }
+
         stage('Install Ansible if Needed') {
             steps {
                 script {
