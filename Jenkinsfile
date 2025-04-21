@@ -8,13 +8,28 @@ pipeline {
     }
 
     stages {
+        stage('Install Ansible if Needed') {
+            steps {
+                script {
+                    sh '''
+                        if ! command -v ansible > /dev/null 2>&1; then
+                            echo "📦 Ansible not found. Installing..."
+                            apt-get update && apt-get install -y software-properties-common
+                            apt-add-repository --yes --update ppa:ansible/ansible
+                            apt-get install -y ansible
+                        else
+                            echo "✅ Ansible already installed."
+                        fi
+                    '''
+                }
+            }
+        }
+
         stage('Get SSH Private Key from Vault') {
             steps {
                 script {
-                    // Create secure temp directory
                     sh 'mkdir -p ~/.ssh_temp && chmod 700 ~/.ssh_temp'
 
-                    // Get SSH key from Vault
                     withCredentials([string(credentialsId: 'vault-token', variable: 'VAULT_TOKEN')]) {
                         sh '''
                             RESPONSE=$(curl --silent --header "X-Vault-Token: $VAULT_TOKEN" --request GET http://vault:8200/v1/secret/aws/pv-key)
@@ -32,13 +47,11 @@ pipeline {
         stage('Run Ansible Playbook From Mounted Host Directory') {
             steps {
                 script {
-                    // Generate a simple inventory file
                     writeFile file: 'inventory.ini', text: """
                     [webserver]
                     ${VM_HOST} ansible_user=${VM_USER} ansible_ssh_private_key_file=~/.ssh_temp/ssh_key.pem ansible_ssh_common_args='-o StrictHostKeyChecking=no'
                     """
 
-                    // Run the playbook using the key and inventory
                     sh '''
                         echo "🚀 Running Ansible playbook..."
                         ansible-playbook -i inventory.ini /var/jenkins_home/nginx.yml
