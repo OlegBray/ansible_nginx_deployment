@@ -1,85 +1,63 @@
 pipeline {
     agent any
+
     environment {
         VAULT_TOKEN = credentials('vault-token')
         VM_HOST = 'oleg.aws.cts.care'
         VM_USER = 'ubuntu'
     }
+
     stages {
         stage('Get SSH Private Key from Vault') {
             steps {
                 script {
-                    // Create a directory for storing credentials securely
+                    // Create secure temp directory
                     sh 'mkdir -p ~/.ssh_temp && chmod 700 ~/.ssh_temp'
-                    
-                    // Retrieve private key from Vault using direct curl with basic shell processing
-                    withCredentials([string(credentialsId: 'vault-token-secret-text', variable: 'VAULT_TOKEN')]) {
+
+                    // Get SSH key from Vault
+                    withCredentials([string(credentialsId: 'vault-token', variable: 'VAULT_TOKEN')]) {
                         sh '''
-                            # Get response from Vault 
-                            RESPONSE=$(curl --silent --header "X-Vault-Token: $VAULT_TOKEN" --request GET http://vault:8200/v1/secret/aws/privat-key)
-                            
-                            # Extract the private key using basic shell commands
+                            RESPONSE=$(curl --silent --header "X-Vault-Token: $VAULT_TOKEN" --request GET http://vault:8200/v1/secret/aws/pv-key)
                             echo "$RESPONSE" | sed 's/.*"value":"//' | sed 's/".*//' > ~/.ssh_temp/ssh_key.pem
-                            
-                            # Fix newlines (replace \\n with actual newlines)
                             sed -i 's/\\\\n/\\n/g' ~/.ssh_temp/ssh_key.pem
-                            
-                            # Set correct permissions
                             chmod 600 ~/.ssh_temp/ssh_key.pem
                         '''
                     }
-                    
-                    echo "Private Key retrieved and stored securely"
-                    
-                    // Test connection to VM
-                    sh """
-                        ssh -o StrictHostKeyChecking=no -i ~/.ssh_temp/ssh_key.pem ${VM_USER}@${VM_HOST} 'echo "Successfully connected to the virtual machine!"'
-                    """
+
+                    echo "✅ SSH private key retrieved and saved."
                 }
             }
         }
-        
-        stage('Run Ansible Playbook') {
+
+        stage('Run Ansible Playbook From Mounted Host Directory') {
             steps {
                 script {
-                    // Execute the playbook directly on the remote server
-                    sh """
-                        # Copy the playbook to the remote server
-                        scp -o StrictHostKeyChecking=no -i ~/.ssh_temp/ssh_key.pem playbook-Nginx.yml ${VM_USER}@${VM_HOST}:~/playbook-Nginx.yml
-                        
-                        # Ensure Ansible is installed on the remote server
-                        ssh -o StrictHostKeyChecking=no -i ~/.ssh_temp/ssh_key.pem ${VM_USER}@${VM_HOST} '
-                            if ! command -v ansible-playbook &> /dev/null; then
-                                echo "Installing Ansible on the remote server..."
-                                sudo apt-get update
-                                sudo apt-get install -y ansible
-                            fi
-                            
-                            # Create a simple localhost inventory file
-                            echo "[webserver]" > ~/inventory
-                            echo "localhost ansible_connection=local" >> ~/inventory
-                            
-                            # Run the playbook
-                            ansible-playbook -i ~/inventory ~/playbook-Nginx.yml
-                        '
+                    // Generate a simple inventory file
+                    writeFile file: 'inventory.ini', text: """
+                    [webserver]
+                    ${VM_HOST} ansible_user=${VM_USER} ansible_ssh_private_key_file=~/.ssh_temp/ssh_key.pem ansible_ssh_common_args='-o StrictHostKeyChecking=no'
                     """
+
+                    // Run the playbook using the key and inventory
+                    sh '''
+                        echo "🚀 Running Ansible playbook..."
+                        ansible-playbook -i inventory.ini /var/jenkins_home/nginx.yml
+                    '''
                 }
             }
         }
-        
+
         stage('Cleanup') {
             steps {
-                // Clean up the SSH key after use
-                sh 'rm -rf ~/.ssh_temp'
-                echo "Credentials cleaned up"
+                sh 'rm -rf ~/.ssh_temp inventory.ini'
+                echo "🧹 Cleaned up temporary files."
             }
         }
     }
-    
+
     post {
         always {
-            // Ensure credentials are always cleaned up, even if the pipeline fails
-            sh 'rm -rf ~/.ssh_temp || true'
+            sh 'rm -rf ~/.ssh_temp inventory.ini || true'
         }
     }
 }
