@@ -1,7 +1,7 @@
 pipeline {
     agent any
     environment {
-        VAULT_TOKEN = credentials('vault-token-secret-text')
+        VAULT_TOKEN = credentials('vault-token')
         VM_HOST = 'oleg.aws.cts.care'
         VM_USER = 'ubuntu'
     }
